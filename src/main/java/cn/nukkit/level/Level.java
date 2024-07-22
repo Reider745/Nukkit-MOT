@@ -933,6 +933,8 @@ public class Level implements ChunkManager, Metadatable {
         return gameRules;
     }
 
+    private final ExecutorService executorService = Executors.newCachedThreadPool();
+
     @SuppressWarnings("unchecked")
     public void doTick(int currentTick) {
         updateBlockLight(lightQueue);
@@ -996,16 +998,25 @@ public class Level implements ChunkManager, Metadatable {
 
         QueuedUpdate queuedUpdate;
         while ((queuedUpdate = this.normalUpdateQueue.poll()) != null) {
-            Block block = getBlock(queuedUpdate.block, queuedUpdate.block.layer);
-            BlockUpdateEvent event = new BlockUpdateEvent(block);
-            this.server.getPluginManager().callEvent(event);
+            final QueuedUpdate finalQueuedUpdate = queuedUpdate;
+            executorService.submit(() -> {
+                Block block = getBlock(finalQueuedUpdate.block, finalQueuedUpdate.block.layer);
+                BlockUpdateEvent event = new BlockUpdateEvent(block);
+                this.server.getPluginManager().callEvent(event);
 
-            if (!event.isCancelled()) {
-                block.onUpdate(BLOCK_UPDATE_NORMAL);
-                if (queuedUpdate.neighbor != null) {
-                    block.onNeighborChange(queuedUpdate.neighbor.getOpposite());
+                if (!event.isCancelled()) {
+                    block.onUpdate(BLOCK_UPDATE_NORMAL);
+                    if (finalQueuedUpdate.neighbor != null) {
+                        block.onNeighborChange(finalQueuedUpdate.neighbor.getOpposite());
+                    }
                 }
-            }
+            });
+        }
+
+        try {
+            while(executorService.awaitTermination(1, TimeUnit.MILLISECONDS)){}
+        }catch (InterruptedException e){
+            e.printStackTrace();
         }
 
         if (!this.updateEntities.isEmpty()) {
