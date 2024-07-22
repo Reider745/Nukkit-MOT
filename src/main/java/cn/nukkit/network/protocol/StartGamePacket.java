@@ -43,7 +43,7 @@ public class StartGamePacket extends DataPacket {
     public float yaw;
     public float pitch;
     public int seed;
-    public byte dimension;
+    public int dimension;
     public int generator = 1;
     public int worldGamemode;
     public int difficulty;
