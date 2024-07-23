@@ -17,6 +17,7 @@ import cn.nukkit.entity.passive.EntityIronGolem;
 import cn.nukkit.entity.projectile.EntityArrow;
 import cn.nukkit.entity.weather.EntityLightning;
 import cn.nukkit.event.block.BlockBreakEvent;
+import cn.nukkit.event.block.BlockChangeEvent;
 import cn.nukkit.event.block.BlockPlaceEvent;
 import cn.nukkit.event.block.BlockUpdateEvent;
 import cn.nukkit.event.entity.CreatureSpawnEvent;
@@ -2142,7 +2143,7 @@ public class Level implements ChunkManager, Metadatable {
             if (blockPrevious.isTransparent() != block.isTransparent() || blockPrevious.getLightLevel() != block.getLightLevel()) {
                 addLightUpdate(x, y, z);
             }
-            BlockUpdateEvent ev = new BlockUpdateEvent(block);
+            BlockChangeEvent ev = new BlockChangeEvent(block, blockPrevious);
             this.server.getPluginManager().callEvent(ev);
             if (!ev.isCancelled()) {
                 for (Entity entity : this.getNearbyEntities(new SimpleAxisAlignedBB(x - 1, y - 1, z - 1, x + 1, y + 1, z + 1))) {
@@ -2596,7 +2597,7 @@ public class Level implements ChunkManager, Metadatable {
         }
 
         if (player != null) {
-            PlayerInteractEvent ev = new PlayerInteractEvent(player, item, target, face, Action.RIGHT_CLICK_BLOCK);
+            PlayerInteractEvent ev = new PlayerInteractEvent(player, item, target, face, Action.RIGHT_CLICK_BLOCK, new Vector3(fx, fy, fz));
 
             if (player.getGamemode() > Player.ADVENTURE) {
                 ev.setCancelled();
