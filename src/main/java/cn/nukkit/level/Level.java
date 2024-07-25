@@ -312,6 +312,7 @@ public class Level implements ChunkManager, Metadatable {
     private static final AtomicInteger callbackIdCounter = new AtomicInteger();
     private final Int2ObjectMap<Consumer<Block>> callbackBlockSet = new Int2ObjectOpenHashMap<>();
     private final Int2ObjectMap<BiConsumer<Long, DataPacket>> callbackChunkPacketSend = new Int2ObjectOpenHashMap<>();
+    private final TickLevelThread tickThread;
 
     public Level(Server server, String name, String path, Class<? extends LevelProvider> provider) {
         this.levelId = levelIdCounter++;
@@ -379,6 +380,8 @@ public class Level implements ChunkManager, Metadatable {
         if (this.server.asyncChunkSending) {
             this.asyncChuckExecutor = Executors.newSingleThreadExecutor(new ThreadFactoryBuilder().setNameFormat("AsyncChunkThread for " + name).build());
         }
+
+        tickThread = new TickLevelThread(server, this);
     }
 
     public static long chunkHash(int x, int z) {
@@ -455,6 +458,8 @@ public class Level implements ChunkManager, Metadatable {
         Generator generator = generators.get();
         this.dimensionData = generator.getDimensionData();
         this.gameRules = this.requireProvider().getGamerules();
+
+        tickThread.load();
     }
 
     public Generator getGenerator() {
@@ -807,6 +812,7 @@ public class Level implements ChunkManager, Metadatable {
             this.server.setDefaultLevel(null);
         }
 
+        tickThread.load();
         this.close();
 
         return true;
