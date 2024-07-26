@@ -2313,7 +2313,7 @@ public class Server {
         }
 
         if (provider == null) {
-            provider = LevelProviderManager.getProviderByName("leveldb");
+            provider = LevelProviderManager.getProviderByName("anvil");
         }
 
         String path;

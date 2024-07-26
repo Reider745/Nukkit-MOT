@@ -11,8 +11,6 @@ public class TickLevelThread extends Thread {
     private final boolean autoTickRate;
     private final int autoTickRateLimit, baseTickRate;
 
-    private boolean isLoaded = false;
-
     public TickLevelThread(Server server, Level level){
         this.server = server;
         this.level = level;
@@ -24,7 +22,7 @@ public class TickLevelThread extends Thread {
 
     @Override
     public void run() {
-        while (isLoaded){
+        while (true){
             long tickTime = System.currentTimeMillis();
 
             long time = tickTime - this.nextTick;
@@ -50,7 +48,7 @@ public class TickLevelThread extends Thread {
                 long levelTime = System.currentTimeMillis();
                 level.providerLock.readLock().lock();
                 if (level.getProvider() == null) {//世界在其他线程上卸载
-                    continue;
+                    break;
                 }
 
                 level.doTick(this.tickCounter);
@@ -91,11 +89,6 @@ public class TickLevelThread extends Thread {
     }
 
     public void load(){
-        isLoaded = true;
         this.start();
-    }
-
-    public void unload(){
-        isLoaded = false;
     }
 }

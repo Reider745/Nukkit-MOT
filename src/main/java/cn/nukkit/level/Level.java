@@ -812,7 +812,6 @@ public class Level implements ChunkManager, Metadatable {
             this.server.setDefaultLevel(null);
         }
 
-        tickThread.load();
         this.close();
 
         return true;
