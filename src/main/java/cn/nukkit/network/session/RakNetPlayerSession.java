@@ -146,7 +146,7 @@ public class RakNetPlayerSession extends SimpleChannelInboundHandler<RakMessage>
             buffer.readBytes(packetBuffer);
 
             try {
-                this.server.getNetwork().processBatch(packetBuffer, this.inbound, compressionIn, this.channel.config().getProtocolVersion(), this.player);
+                this.server.getNetwork().processBatch(packetBuffer, this.inbound, compressionIn, this.channel.config().getProtocolVersion(), this.player, this);
             } catch (Exception e) {
                 this.disconnect("Sent malformed packet");
                 log.error("[{}] Unable to process batch packet", (this.player == null ? this.channel.remoteAddress() : this.player.getName()), e);
@@ -184,6 +184,17 @@ public class RakNetPlayerSession extends SimpleChannelInboundHandler<RakMessage>
 
         if (packet.protocol != this.player.protocol) {
             log.warn("Wrong protocol used for {}! expected {} got{}", packet.getClass().getSimpleName(), this.player.protocol, packet.protocol);
+        }
+
+        if (packet.packetId() != ProtocolInfo.toNewProtocolID(ProtocolInfo.BATCH_PACKET)) {
+            packet.tryEncode();
+        }
+        this.outbound.offer(packet);
+    }
+
+    public void sendPacketNotPlayer(DataPacket packet) {
+        if (!this.channel.isActive()) {
+            return;
         }
 
         if (packet.packetId() != ProtocolInfo.toNewProtocolID(ProtocolInfo.BATCH_PACKET)) {

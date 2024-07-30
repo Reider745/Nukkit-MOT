@@ -67,8 +67,8 @@ public class LoginPacket extends DataPacket {
         return protocol_;
     }
 
-    private void decodeChainData() {
-        int size = this.getLInt();
+    protected void decodeChainData() {
+        int size = this.getLInt(); 
         if (size > 3000000) {
             throw new IllegalArgumentException("The chain data is too big: " + size);
         }
@@ -88,7 +88,7 @@ public class LoginPacket extends DataPacket {
         }
     }
 
-    private void decodeSkinData() {
+    protected void decodeSkinData() {
         int size = this.getLInt();
         if (size > 3000000) {
             throw new IllegalArgumentException("The skin data is too big: " + size);
