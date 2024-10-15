@@ -22,20 +22,23 @@ import cn.nukkit.network.LittleEndianByteBufInputStream;
 import cn.nukkit.network.LittleEndianByteBufOutputStream;
 import cn.nukkit.network.protocol.ProtocolInfo;
 import cn.nukkit.network.protocol.types.EntityLink;
-import cn.nukkit.network.protocol.types.itemstack.ContainerSlotType;
-import cn.nukkit.network.protocol.types.itemstack.request.ItemStackRequest;
-import cn.nukkit.network.protocol.types.itemstack.request.ItemStackRequestSlotData;
-import cn.nukkit.network.protocol.types.itemstack.request.TextProcessingEventOrigin;
-import cn.nukkit.network.protocol.types.itemstack.request.action.*;
+import cn.nukkit.network.protocol.types.inventory.ContainerSlotType;
+import cn.nukkit.network.protocol.types.inventory.itemstack.request.ItemStackRequest;
+import cn.nukkit.network.protocol.types.inventory.itemstack.request.ItemStackRequestSlotData;
+import cn.nukkit.network.protocol.types.inventory.itemstack.request.TextProcessingEventOrigin;
+import cn.nukkit.network.protocol.types.inventory.itemstack.request.action.*;
 import com.google.common.base.Preconditions;
 import io.netty.buffer.AbstractByteBufAllocator;
 import io.netty.buffer.ByteBuf;
 import io.netty.buffer.ByteBufAllocator;
 import it.unimi.dsi.fastutil.io.FastByteArrayInputStream;
 import lombok.SneakyThrows;
+import org.cloudburstmc.nbt.NBTOutputStream;
+import org.cloudburstmc.nbt.NbtUtils;
 import org.jetbrains.annotations.NotNull;
 
 import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.lang.reflect.Array;
 import java.nio.ByteOrder;
@@ -716,10 +719,13 @@ public class BinaryStream {
         }
 
         int blockRuntimeId = this.getVarInt();// blockRuntimeId
-        if (id != null && id < 256 && id != 166) { // ItemBlock
-            int fullId = GlobalBlockPalette.getLegacyFullId(protocolId, blockRuntimeId);
-            if (fullId != -1) {
-                damage = fullId & Block.DATA_MASK;
+        //TODO 在1.21.30会得到错误数据
+        if (protocolId < ProtocolInfo.v1_21_30) {
+            if (id != null && id < 256 && id != 166) { // ItemBlock
+                int fullId = GlobalBlockPalette.getLegacyFullId(protocolId, blockRuntimeId);
+                if (fullId != -1) {
+                    damage = fullId & Block.DATA_MASK;
+                }
             }
         }
 
@@ -1456,6 +1462,9 @@ public class BinaryStream {
         putBoolean(link.immediate);
         if (protocol >= 407) {
             putBoolean(link.riderInitiated);
+            if (protocol >= ProtocolInfo.v1_21_20) {
+                putLFloat(link.vehicleAngularVelocity);
+            }
         }
     }
 
@@ -1465,7 +1474,8 @@ public class BinaryStream {
                 getEntityUniqueId(),
                 (byte) getByte(),
                 getBoolean(),
-                getBoolean() //1.16+
+                getBoolean(), //1.16+
+                getLFloat() //1.21.20+
         );
     }
 
@@ -1604,6 +1614,16 @@ public class BinaryStream {
         return (minCapacity > MAX_ARRAY_SIZE) ?
                 Integer.MAX_VALUE :
                 MAX_ARRAY_SIZE;
+    }
+
+    public <T> void putNbtTag(T tag) {
+        ByteArrayOutputStream stream = new ByteArrayOutputStream();
+        try (NBTOutputStream writer = NbtUtils.createNetworkWriter(stream)) {
+            writer.writeTag(tag);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+        this.put(stream.toByteArray());
     }
 
     public ItemStackRequest readItemStackRequest() {

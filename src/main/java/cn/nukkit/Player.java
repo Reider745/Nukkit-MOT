@@ -10,6 +10,7 @@ import cn.nukkit.command.Command;
 import cn.nukkit.command.CommandSender;
 import cn.nukkit.command.data.CommandDataVersions;
 import cn.nukkit.command.defaults.HelpCommand;
+import cn.nukkit.command.utils.RawText;
 import cn.nukkit.entity.*;
 import cn.nukkit.entity.data.*;
 import cn.nukkit.entity.data.property.EntityProperty;
@@ -45,11 +46,13 @@ import cn.nukkit.item.*;
 import cn.nukkit.item.enchantment.Enchantment;
 import cn.nukkit.item.food.Food;
 import cn.nukkit.item.trim.TrimFactory;
+import cn.nukkit.lang.CommandOutputContainer;
 import cn.nukkit.lang.LangCode;
 import cn.nukkit.lang.TextContainer;
 import cn.nukkit.lang.TranslationContainer;
 import cn.nukkit.level.*;
 import cn.nukkit.level.format.FullChunk;
+import cn.nukkit.level.format.generic.BaseFullChunk;
 import cn.nukkit.level.particle.ItemBreakParticle;
 import cn.nukkit.level.particle.PunchBlockParticle;
 import cn.nukkit.level.sound.ExperienceOrbSound;
@@ -221,6 +224,7 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
     protected boolean removeFormat = true;
 
     protected String username;
+    protected String unverifiedUsername = "";
     protected String iusername;
     protected String displayName;
 
@@ -331,10 +335,12 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
     private int timeSinceRest;
     private boolean inSoulSand;
     private boolean dimensionChangeInProgress;
+    private int riptideTicks;
 
     private boolean needSendData;
     private boolean needSendAdventureSettings;
     private boolean needSendFoodLevel;
+    @Setter
     private boolean needSendInventory;
     private boolean needSendHeldItem;
     private boolean dimensionFix560;
@@ -1210,7 +1216,7 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
             return false;
         }
 
-        this.nextChunkOrderRun = 200;
+        this.nextChunkOrderRun = 20;
 
         loadQueue.clear();
         Long2ObjectOpenHashMap<Boolean> lastChunk = new Long2ObjectOpenHashMap<>(this.usedChunks);
@@ -1906,22 +1912,35 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
             return;
         }
 
-        boolean invalidMotion = false;
-        Location revertPos = this.getLocation().clone();
         double distance = clientPos.distanceSquared(this);
 
-        if (!this.level.isChunkGenerated(clientPos.getChunkX(), clientPos.getChunkZ())) {
-            invalidMotion = true;
-            this.nextChunkOrderRun = 0;
-        } else if (distance > 128) {
-            invalidMotion = true;
-            getServer().getLogger().warning(String.format("%s moved too far (%.2f)", this.getName(), distance));
+        int maxDist = 9;
+        if (this.riptideTicks > 95 || clientPos.y - this.y < 2 || this.isOnLadder()) { // TODO: Remove ladder/vines check when block collisions are fixed
+            maxDist = 49;
         }
 
-        if (invalidMotion) {
-            this.revertClientMotion(revertPos);
+        if (distance > maxDist) {
+            this.revertClientMotion(this);
+            server.getLogger().debug(username + ": distanceSquared=" + distance +  " > maxDist=" + maxDist);
             return;
         }
+
+        if (this.chunk == null || !this.chunk.isGenerated()) {
+            BaseFullChunk chunk = this.level.getChunk(clientPos.getChunkX(), clientPos.getChunkZ(), false);
+            if (chunk == null || !chunk.isGenerated()) {
+                this.nextChunkOrderRun = 0;
+                this.revertClientMotion(this);
+                return;
+            } else {
+                if (this.chunk != null) {
+                    this.chunk.removeEntity(this);
+                }
+                this.chunk = chunk;
+            }
+        }
+
+        boolean invalidMotion = false;
+        Location revertPos = this.getLocation().clone();
 
         double diffX = clientPos.getX() - this.x;
         double diffY = clientPos.getY() - this.y;
@@ -2022,13 +2041,13 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
                     if (!target.equals(event.getTo())) {
                         this.teleport(event.getTo(), null);
                     } else {
-                        //1.19.0-
+                        //1.7.0-
                         this.addMovement(this.x, this.y, this.z, this.yaw, this.pitch, this.headYaw,
                                 this.getViewers().values()
                                         .stream()
-                                        .filter(p -> p.protocol < ProtocolInfo.v1_19_0)
+                                        .filter(p -> p.protocol < ProtocolInfo.v1_7_0)
                                         .collect(Collectors.toList()));
-                        //1.19.0+
+                        //1.7.0+
                         this.broadcastMovement();
                     }
                 } else {
@@ -2050,7 +2069,7 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
             }
         }
 
-        if (!invalidMotion && this.isFoodEnabled() && this.getServer().getDifficulty() > 0 && distance >= 0.05) {
+        if (!invalidMotion && this.isFoodEnabled() && this.getServer().getDifficulty() > 0 && distance >= 0.05 && this.riding == null) {
             double jump = 0;
             double swimming = this.isInsideOfWater() ? 0.015 * distance : 0;
             double distance2 = distance;
@@ -2225,6 +2244,10 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
 
         this.failedTransactions = 0;
 
+        if (this.riptideTicks > 0) {
+            this.riptideTicks -= tickDiff;
+        }
+
         if (this.fishing != null && this.age % 20 == 0) {
             if (this.distanceSquared(fishing) > 1089) { // 33 blocks
                 this.stopFishing(false);
@@ -2276,14 +2299,10 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
 
             if (!this.isSpectator() && this.speed != null) {
                 if (this.onGround) {
-                    if (this.inAirTicks != 0) {
-                        this.startAirTicks = 10;
-                    }
-                    this.inAirTicks = 0;
-                    this.highestPosition = this.y;
                     if (this.isGliding()) {
                         this.setGliding(false);
                     }
+                    this.resetFallDistance();
                 } else {
                     if (this.checkMovement && !this.isGliding() && !server.getAllowFlight() && this.inAirTicks > 20 && !this.getAllowFlight() && !this.isSleeping() && !this.isImmobile() && !this.isSwimming() && this.riding == null && !this.hasEffect(Effect.LEVITATION) && !this.hasEffect(Effect.SLOW_FALLING)) {
                         double expectedVelocity = (-this.getGravity()) / ((double) this.getDrag()) - ((-this.getGravity()) / ((double) this.getDrag())) * FastMath.exp(-((double) this.getDrag()) * ((double) (this.inAirTicks - this.startAirTicks)));
@@ -2922,27 +2941,32 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
 
                 this.protocol = loginPacket.getProtocol();
 
-                this.username = TextFormat.clean(loginPacket.username);
+                this.unverifiedUsername = TextFormat.clean(loginPacket.username);
 
                 if (!ProtocolInfo.SUPPORTED_PROTOCOLS.contains(this.protocol)) {
                     this.close("", "You are running unsupported Minecraft version");
-                    this.server.getLogger().debug(this.username + " disconnected with protocol (SupportedProtocols) " + this.protocol);
+                    this.server.getLogger().debug(this.unverifiedUsername + " disconnected with protocol (SupportedProtocols) " + this.protocol);
                     break;
                 }
 
                 if (this.protocol < server.minimumProtocol) {
                     this.close("", "Multiversion support for this Minecraft version is disabled");
-                    this.server.getLogger().debug(this.username + " disconnected with protocol (minimumProtocol) " + this.protocol);
+                    this.server.getLogger().debug(this.unverifiedUsername + " disconnected with protocol (minimumProtocol) " + this.protocol);
                     break;
                 } else if (this.server.maximumProtocol >= Math.max(0, this.server.minimumProtocol) && this.protocol > this.server.maximumProtocol) {
                     this.close("", "Support for this Minecraft version is not enabled");
-                    this.server.getLogger().debug(this.username + " disconnected with unsupported protocol (maximumProtocol) " + this.protocol);
+                    this.server.getLogger().debug(this.unverifiedUsername + " disconnected with unsupported protocol (maximumProtocol) " + this.protocol);
                     break;
                 }
 
-                this.displayName = this.username;
-                this.iusername = this.username.toLowerCase();
-                this.setDataProperty(new StringEntityData(DATA_NAMETAG, this.username), false);
+                if (loginPacket.skin == null) {
+                    this.close("", "disconnectionScreen.invalidSkin");
+                    return;
+                }
+
+                if (this.server.getOnlinePlayers().size() >= this.server.getMaxPlayers() && this.kick(PlayerKickEvent.Reason.SERVER_FULL, "disconnectionScreen.serverFull", false)) {
+                    return;
+                }
 
                 this.loginChainData = ClientChainData.read(loginPacket);
 
@@ -2955,15 +2979,18 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
                     break;
                 }
 
-                if (this.server.getOnlinePlayersCount() >= this.server.getMaxPlayers() && this.kick(PlayerKickEvent.Reason.SERVER_FULL, "disconnectionScreen.serverFull")) {
-                    break;
-                }
-
                 if (this.server.isWaterdogCapable() && loginChainData.getWaterdogIP() != null) {
                     this.socketAddress = new InetSocketAddress(this.loginChainData.getWaterdogIP(), this.getRawPort());
                 }
 
                 this.version = loginChainData.getGameVersion();
+
+                // Do not set username before the user is authenticated
+                this.username = this.unverifiedUsername;
+                this.unverifiedUsername = null;
+                this.displayName = this.username;
+                this.iusername = this.username.toLowerCase();
+                this.setDataProperty(new StringEntityData(DATA_NAMETAG, this.username), false);
 
                 this.server.getLogger().debug("Name: " + this.username + " Protocol: " + this.protocol + " Version: " + this.version);
 
@@ -3368,7 +3395,7 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
                     }
                 }
 
-                Vector3 clientPosition = authPacket.getPosition().subtract(0, this.getBaseOffset(), 0).asVector3();
+                Vector3 clientPosition = authPacket.getPosition().subtract(0, this.riding == null ? this.getBaseOffset() : this.riding.getMountedOffset(this).getY(), 0).asVector3();
 
                 double distSqrt = clientPosition.distanceSquared(this);
                 if (distSqrt == 0.0 && authPacket.getYaw() % 360 == this.yaw && authPacket.getPitch() % 360 == this.pitch) {
@@ -3426,7 +3453,7 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
                 Vector3 pos = this.temporalVector.setComponents(playerActionPacket.x, playerActionPacket.y, playerActionPacket.z);
                 BlockFace face = BlockFace.fromIndex(playerActionPacket.face);
 
-                actionswitch:
+                stopItemHold:
                 switch (playerActionPacket.action) {
                     case PlayerActionPacket.ACTION_START_BREAK:
                         if (this.isServerAuthoritativeBlockBreaking()) break;
@@ -3572,6 +3599,71 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
                             this.setSwimming(false);
                         }
                         break;
+                    case PlayerActionPacket.ACTION_START_SPIN_ATTACK:
+                        if (this.inventory == null) {
+                            break stopItemHold;
+                        }
+
+                        PlayerToggleSpinAttackEvent playerToggleSpinAttackEvent = new PlayerToggleSpinAttackEvent(this, true);
+
+                        int riptideLevel = 0;
+                        Item hand;
+                        if ((hand = this.inventory.getItemInHandFast()).getId() != ItemID.TRIDENT) {
+                            playerToggleSpinAttackEvent.setCancelled(true);
+                            this.getServer().getLogger().debug(username + ": got ACTION_START_SPIN_ATTACK but hand item is not a trident");
+                        } else {
+                            Enchantment riptide = hand.getEnchantment(Enchantment.ID_TRIDENT_RIPTIDE);
+                            if (riptide == null) {
+                                playerToggleSpinAttackEvent.setCancelled(true);
+                            } else {
+                                riptideLevel = riptide.getLevel();
+                                if (riptideLevel < 1) {
+                                    playerToggleSpinAttackEvent.setCancelled(true);
+                                } else {
+                                    boolean inWater = false;
+                                    for (Block block : this.getCollisionBlocks()) {
+                                        if (block instanceof BlockWater) {
+                                            inWater = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!(inWater || (this.getLevel().isRaining() && this.canSeeSky()))) {
+                                        playerToggleSpinAttackEvent.setCancelled(true);
+                                    }
+                                }
+                            }
+                        }
+
+                        this.server.getPluginManager().callEvent(playerToggleSpinAttackEvent);
+
+                        if (playerToggleSpinAttackEvent.isCancelled()) {
+                            this.needSendData = true;
+                        } else {
+                            this.setSpinAttack(true);
+                            this.resetFallDistance();
+
+                            this.riptideTicks = 50 + (riptideLevel << 5);
+
+                            int riptideSound;
+                            if (riptideLevel >= 3) {
+                                riptideSound = LevelSoundEventPacket.SOUND_ITEM_TRIDENT_RIPTIDE_3;
+                            } else if (riptideLevel == 2) {
+                                riptideSound = LevelSoundEventPacket.SOUND_ITEM_TRIDENT_RIPTIDE_2;
+                            } else {
+                                riptideSound = LevelSoundEventPacket.SOUND_ITEM_TRIDENT_RIPTIDE_1;
+                            }
+                            this.level.addLevelSoundEvent(this, riptideSound);
+                        }
+                        break stopItemHold;
+                    case PlayerActionPacket.ACTION_STOP_SPIN_ATTACK:
+                        playerToggleSpinAttackEvent = new PlayerToggleSpinAttackEvent(this, false);
+                        this.server.getPluginManager().callEvent(playerToggleSpinAttackEvent);
+                        if (playerToggleSpinAttackEvent.isCancelled()) {
+                            this.needSendData = true;
+                        } else {
+                            this.setSpinAttack(false);
+                        }
+                        return;
                     case PlayerActionPacket.ACTION_MISSED_SWING:
                         if (this.isMovementServerAuthoritative() || this.isLockMovementInput() || this.protocol < ProtocolInfo.v1_20_10_21) break;
                         PlayerMissedSwingEvent pmse = new PlayerMissedSwingEvent(this);
@@ -3884,6 +3976,17 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
                     TradeInventory tradeInventory = this.getTradeInventory();
                     if (tradeInventory != null) {
                         this.removeWindow(tradeInventory, true);
+                    }
+                } else { // Close bugged inventory
+                    ContainerClosePacket pk = new ContainerClosePacket();
+                    pk.windowId = containerClosePacket.windowId;
+                    pk.wasServerInitiated = false;
+                    this.dataPacket(pk);
+
+                    for (Inventory open : new ArrayList<>(this.windows.keySet())) {
+                        if (open instanceof ContainerInventory) {
+                            this.removeWindow(open);
+                        }
                     }
                 }
                 break;
@@ -4845,6 +4948,24 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
         this.sendMessage(message.getText());
     }
 
+    public void sendCommandOutput(CommandOutputContainer container) {
+        if (this.level.getGameRules().getBoolean(GameRule.SEND_COMMAND_FEEDBACK)) {
+            var pk = new CommandOutputPacket();
+            pk.messages.addAll(container.getMessages());
+            pk.commandOriginData = new CommandOriginData(CommandOriginData.Origin.PLAYER, this.getUniqueId(), "", null);//Only players can effect
+            pk.type = CommandOutputType.ALL_OUTPUT;//Useless
+            pk.successCount = container.getSuccessCount();//Useless,maybe used for server-client interaction
+            this.dataPacket(pk);
+        }
+    }
+
+    public void sendRawTextMessage(RawText text) {
+        TextPacket pk = new TextPacket();
+        pk.type = TextPacket.TYPE_OBJECT;
+        pk.message = text.toRawText();
+        this.dataPacket(pk);
+    }
+
     public void sendTranslation(String message) {
         this.sendTranslation(message, new String[0]);
     }
@@ -4917,6 +5038,20 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
         this.dataPacket(pk);
     }
 
+    /**
+     * 设置一个JSON文本副标题。
+     * <p>
+     * Set a JSON text subtitle.
+     *
+     * @param text JSON文本<br>JSON text
+     */
+    public void setRawTextSubTitle(RawText text) {
+        SetTitlePacket pk = new SetTitlePacket();
+        pk.type = SetTitlePacket.TYPE_SUBTITLE_JSON;
+        pk.text = text.toRawText();
+        this.dataPacket(pk);
+    }
+
     public void setTitleAnimationTimes(int fadein, int duration, int fadeout) {
         SetTitlePacket pk = new SetTitlePacket();
         pk.type = SetTitlePacket.TYPE_ANIMATION_TIMES;
@@ -4950,6 +5085,20 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
         this.setTitle(Strings.isNullOrEmpty(title) ? " " : title);
     }
 
+    /**
+     * 设置一个JSON文本标题。
+     * <p>
+     * Set a JSON text title.
+     *
+     * @param text JSON文本<br>JSON text
+     */
+    public void setRawTextTitle(RawText text) {
+        SetTitlePacket pk = new SetTitlePacket();
+        pk.type = SetTitlePacket.TYPE_TITLE_JSON;
+        pk.text = text.toRawText();
+        this.dataPacket(pk);
+    }
+
     public void sendActionBar(String title) {
         this.sendActionBar(title, 1, 0, 1);
     }
@@ -4958,6 +5107,35 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
         SetTitlePacket pk = new SetTitlePacket();
         pk.type = SetTitlePacket.TYPE_ACTION_BAR;
         pk.text = Strings.isNullOrEmpty(title) ? " " : title;
+        pk.fadeInTime = fadein;
+        pk.stayTime = duration;
+        pk.fadeOutTime = fadeout;
+        this.dataPacket(pk);
+    }
+
+    /**
+     * fadein=1,duration=0,fadeout=1
+     *
+     * @see #setRawTextActionBar(RawText, int, int, int)
+     */
+    public void setRawTextActionBar(RawText text) {
+        this.setRawTextActionBar(text, 1, 0, 1);
+    }
+
+    /**
+     * 设置一个JSON ActionBar消息。
+     * <p>
+     * Set a JSON ActionBar text.
+     *
+     * @param text     JSON文本<br>JSON text
+     * @param fadein   淡入时间
+     * @param duration 持续时间
+     * @param fadeout  淡出时间
+     */
+    public void setRawTextActionBar(RawText text, int fadein, int duration, int fadeout) {
+        SetTitlePacket pk = new SetTitlePacket();
+        pk.type = SetTitlePacket.TYPE_ACTIONBAR_JSON;
+        pk.text = text.toRawText();
         pk.fadeInTime = fadein;
         pk.stayTime = duration;
         pk.fadeOutTime = fadeout;
@@ -5092,7 +5270,7 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
             this.server.getPluginManager().unsubscribeFromPermission(Server.BROADCAST_CHANNEL_USERS, this);
             this.spawned = false;
             this.server.getLogger().info(this.getServer().getLanguage().translateString("nukkit.player.logOut",
-                    TextFormat.AQUA + (this.username == null ? "" : this.username) + TextFormat.WHITE,
+                    TextFormat.AQUA + (this.getName() == null ? this.unverifiedUsername : this.getName()) + TextFormat.WHITE,
                     this.getAddress(),
                     String.valueOf(this.getPort()),
                     this.getServer().getLanguage().translateString(reason)));
@@ -5489,6 +5667,8 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
 
         this.setSprinting(false, false);
         this.setSneaking(false);
+        this.setSwimming(false);
+        this.setGliding(false);
 
         this.extinguish();
         this.setDataProperty(new ShortEntityData(Player.DATA_AIR, 400), false);
@@ -5767,6 +5947,8 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
         if (targets != null) {
             Server.broadcastPacket(targets, pk);
         } else {
+            this.clientMovements.clear();
+
             this.dataPacket(pk);
         }
     }
@@ -6000,6 +6182,17 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
         this.dataPacket(packet);
         this.formOpen = true;
         return id;
+    }
+
+    /**
+     * Close form windows sent with showFormWindow
+     */
+    public void closeFormWindows() {
+        if (this.protocol < ProtocolInfo.v1_21_2) {
+            return;
+        }
+        this.formWindows.clear();
+        this.dataPacket(new ClientboundCloseFormPacket());
     }
 
     public void showDialogWindow(FormWindowDialog dialog) {
@@ -6814,7 +7007,7 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
                         .add(new FloatTag("", (float) yaw))
                         .add(new FloatTag("", (float) pitch)));
         double f = 1.1;
-        EntityFishingHook fishingHook = new EntityFishingHook(chunk, nbt, this);
+        EntityFishingHook fishingHook = (EntityFishingHook) Entity.createEntity("FishingHook", chunk, nbt, this);
         fishingHook.setMotion(new Vector3(-Math.sin(FastMath.toRadians(yaw)) * Math.cos(FastMath.toRadians(pitch)) * f * f, -Math.sin(FastMath.toRadians(pitch)) * f * f,
                 Math.cos(FastMath.toRadians(yaw)) * Math.cos(FastMath.toRadians(pitch)) * f * f));
         ProjectileLaunchEvent ev = new ProjectileLaunchEvent(fishingHook);
@@ -6868,10 +7061,10 @@ public class Player extends EntityHuman implements CommandSender, InventoryHolde
             this.setItemCoolDown(event.getShieldBreakCoolDown(), "shield");
         }
         if (animate) {
-            this.setDataFlag(DATA_FLAGS, DATA_FLAG_BLOCKED_USING_DAMAGED_SHIELD, true);
+            this.setDataFlag(DATA_FLAGS_EXTENDED, DATA_FLAG_BLOCKED_USING_DAMAGED_SHIELD, true);
             this.getServer().getScheduler().scheduleTask(InternalPlugin.INSTANCE, () -> {
                 if (this.isOnline()) {
-                    this.setDataFlag(DATA_FLAGS, DATA_FLAG_BLOCKED_USING_DAMAGED_SHIELD, false);
+                    this.setDataFlag(DATA_FLAGS_EXTENDED, DATA_FLAG_BLOCKED_USING_DAMAGED_SHIELD, false);
                 }
             });
         }

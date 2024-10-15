@@ -46,6 +46,8 @@ import cn.nukkit.level.generator.task.PopulationTask;
 import cn.nukkit.level.particle.DestroyBlockParticle;
 import cn.nukkit.level.particle.ItemBreakParticle;
 import cn.nukkit.level.particle.Particle;
+import cn.nukkit.level.persistence.PersistentDataContainer;
+import cn.nukkit.level.persistence.impl.DelegatePersistentDataContainer;
 import cn.nukkit.level.sound.Sound;
 import cn.nukkit.math.*;
 import cn.nukkit.math.BlockFace.Plane;
@@ -166,6 +168,12 @@ public class Level implements ChunkManager, Metadatable {
         xrayableBlocks[Block.EMERALD_ORE] = true;
         xrayableBlocks[Block.ANCIENT_DEBRIS] = true;
         xrayableBlocks[Block.COPPER_ORE] = true;
+
+        randomTickBlocks[BlockID.CAVE_VINES] = true;
+        randomTickBlocks[BlockID.CAVE_VINES_BODY_WITH_BERRIES] = true;
+        randomTickBlocks[BlockID.CAVE_VINES_HEAD_WITH_BERRIES] = true;
+        randomTickBlocks[BlockID.AZALEA_LEAVES] = true;
+        randomTickBlocks[BlockID.AZALEA_LEAVES_FLOWERED] = true;
     }
 
     @NonComputationAtomic
@@ -236,6 +244,7 @@ public class Level implements ChunkManager, Metadatable {
     private final int chunkPopulationQueueSize;
 
     private boolean autoSave;
+    private boolean autoCompaction;
     @Getter
     @Setter
     private boolean saveOnUnloadEnabled = true;
@@ -264,7 +273,9 @@ public class Level implements ChunkManager, Metadatable {
 
     // Notice: These shouldn't be used in the internal methods
     // Check the dimension id instead
+    @Deprecated
     public final boolean isNether;
+    @Deprecated
     public final boolean isEnd;
 
     private final Class<? extends Generator> generatorClass;
@@ -277,7 +288,7 @@ public class Level implements ChunkManager, Metadatable {
                 if (Server.getInstance().isPrimaryThread()) {
                     generator.init(Level.this, rand);
                 }
-                generator.init(new PopChunkManager(getSeed()), rand);
+                generator.init(new PopChunkManager(getSeed(), Level.this::getDimensionData), rand);
                 return generator;
             } catch (Throwable e) {
                 Server.getInstance().getLogger().logException(e);
@@ -319,6 +330,7 @@ public class Level implements ChunkManager, Metadatable {
         this.blockMetadata = new BlockMetadataStore(this);
         this.server = server;
         this.autoSave = server.getAutoSave();
+        this.autoCompaction = server.isAutoCompactionEnabled();
 
         try {
             this.provider = provider.getConstructor(Level.class, String.class).newInstance(this, path);
@@ -777,6 +789,14 @@ public class Level implements ChunkManager, Metadatable {
 
     public void setAutoSave(boolean autoSave) {
         this.autoSave = autoSave;
+    }
+
+    public boolean isAutoCompaction() {
+        return this.autoCompaction && this.autoSave;
+    }
+
+    public void setAutoCompaction(boolean autoCompaction) {
+        this.autoCompaction = autoCompaction;
     }
 
     public boolean unload() {
@@ -1966,7 +1986,7 @@ public class Level implements ChunkManager, Metadatable {
                     int lcx = x & 0xF;
                     int lcz = z & 0xF;
                     int oldLevel = chunk.getBlockLight(lcx, y, lcz);
-                    int newLevel = Block.light[chunk.getBlockId(lcx, y, lcz)];
+                    int newLevel = Block.getBlockLight(chunk.getBlockId(lcx, y, lcz));
                     if (oldLevel != newLevel) {
                         this.setBlockLightAt(x, y, z, newLevel);
                         long hash = Hash.hashBlock(x, y, z);
@@ -2499,7 +2519,8 @@ public class Level implements ChunkManager, Metadatable {
         }
 
         Vector3 above = new Vector3(target.x, target.y + 1, target.z);
-        if (this.getBlockIdAt((int) above.x, (int) above.y, (int) above.z) == Item.FIRE) {
+        int bid = this.getBlockIdAt((int) above.x, (int) above.y, (int) above.z);
+        if (bid == Item.FIRE || bid == Item.SOUL_FIRE) {
             this.setBlock(above, Block.get(BlockID.AIR), true);
         }
 
@@ -2828,7 +2849,7 @@ public class Level implements ChunkManager, Metadatable {
             }
         }
 
-        if (hand.getWaterloggingLevel() == 0 && hand.canBeFlowedInto() && (block instanceof BlockLiquid || block.getLevelBlockAtLayer(1) instanceof BlockLiquid)) {
+        if (hand.getWaterloggingType() == Block.WaterloggingType.NO_WATERLOGGING && hand.canBeFlowedInto() && (block instanceof BlockLiquid || block.getLevelBlockAtLayer(1) instanceof BlockLiquid)) {
             return null;
         }
 
@@ -4461,6 +4482,18 @@ public class Level implements ChunkManager, Metadatable {
         return this.dimensionData.getDimensionId();
     }
 
+    public final boolean isOverWorld() {
+        return this.getDimension() == DIMENSION_OVERWORLD;
+    }
+
+    public final boolean isNether() {
+        return this.getDimension() == DIMENSION_NETHER;
+    }
+
+    public final boolean isTheEnd() {
+        return this.getDimension() == DIMENSION_THE_END;
+    }
+
     public final boolean isYInRange(int y) {
         return y >= getMinBlockY() && y <= getMaxBlockY();
     }
@@ -4469,10 +4502,12 @@ public class Level implements ChunkManager, Metadatable {
         return y >= getMinBlockY() && y <= getMaxBlockY();
     }
 
+    @Override
     public int getMinBlockY() {
         return this.requireProvider().getMinBlockY();
     }
 
+    @Override
     public int getMaxBlockY() {
         return this.requireProvider().getMaxBlockY();
     }
@@ -4945,6 +4980,39 @@ public class Level implements ChunkManager, Metadatable {
         callbackChunkPacketSend.remove(id);
     }
 
+    public PersistentDataContainer getPersistentDataContainer(Vector3 position) {
+        return this.getPersistentDataContainer(position, false);
+    }
+
+    public PersistentDataContainer getPersistentDataContainer(Vector3 position, boolean create) {
+        BlockEntity blockEntity = this.getBlockEntity(position);
+        if (blockEntity != null) {
+            return blockEntity.getPersistentDataContainer();
+        }
+
+        if (create) {
+            CompoundTag compound = BlockEntity.getDefaultCompound(position, BlockEntity.PERSISTENT_CONTAINER);
+            blockEntity = BlockEntity.createBlockEntity(BlockEntity.PERSISTENT_CONTAINER, this.getChunk(position.getChunkX(), position.getChunkZ()), compound);
+
+            if (blockEntity == null) {
+                throw new IllegalStateException("Failed to create persistent container block entity at " + position);
+            }
+            return blockEntity.getPersistentDataContainer();
+        }
+
+        return new DelegatePersistentDataContainer() {
+            @Override
+            protected PersistentDataContainer createDelegate() {
+                return getPersistentDataContainer(position, true);
+            }
+        };
+    }
+
+    public boolean hasPersistentDataContainer(Vector3 position) {
+        BlockEntity blockEntity = this.getBlockEntity(position);
+        return blockEntity != null && blockEntity.hasPersistentDataContainer();
+    }
+
     private ConcurrentMap<Long, Int2ObjectMap<Player>> getChunkSendQueue(int protocol) {
         int protocolId = this.getChunkProtocol(protocol);
         return this.chunkSendQueues.computeIfAbsent(protocolId, i -> new ConcurrentHashMap<>());
@@ -4956,7 +5024,11 @@ public class Level implements ChunkManager, Metadatable {
     }
 
     private int getChunkProtocol(int protocol) {
-        if (protocol >= ProtocolInfo.v1_21_0) {
+        if (protocol >= ProtocolInfo.v1_21_30) {
+            return ProtocolInfo.v1_21_30;
+        } else if (protocol >= ProtocolInfo.v1_21_20) {
+            return ProtocolInfo.v1_21_20;
+        } else if (protocol >= ProtocolInfo.v1_21_0) {
             return ProtocolInfo.v1_21_0;
         } else if (protocol >= ProtocolInfo.v1_20_80) {
             return ProtocolInfo.v1_20_80;
@@ -5065,7 +5137,10 @@ public class Level implements ChunkManager, Metadatable {
         if (chunk == ProtocolInfo.v1_20_60) if (player == ProtocolInfo.v1_20_60) return true;
         if (chunk == ProtocolInfo.v1_20_70) if (player == ProtocolInfo.v1_20_70) return true;
         if (chunk == ProtocolInfo.v1_20_80) if (player == ProtocolInfo.v1_20_80) return true;
-        if (chunk == ProtocolInfo.v1_21_0) if (player >= ProtocolInfo.v1_21_0) return true;
+        if (chunk == ProtocolInfo.v1_21_0)
+            if (player >= ProtocolInfo.v1_21_0) if (player < ProtocolInfo.v1_21_20) return true;
+        if (chunk == ProtocolInfo.v1_21_20) if (player < ProtocolInfo.v1_21_30) return true;
+        if (chunk == ProtocolInfo.v1_21_30) if (player >= ProtocolInfo.v1_21_30) return true;
         return false; //TODO Multiversion  Remember to update when block palette changes
     }
 

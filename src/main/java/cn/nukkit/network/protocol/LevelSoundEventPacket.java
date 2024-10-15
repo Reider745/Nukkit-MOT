@@ -487,6 +487,12 @@ public class LevelSoundEventPacket extends DataPacket {
     public static final int SOUND_DECORATED_POT_INSERT = 481;
     public static final int SOUND_DECORATED_POT_INSERT_FAILED = 482;
     public static final int SOUND_CRAFTER_DISABLE_SLOT = 483;
+    public static final int SOUND_TRIAL_SPAWNER_OPEN_SHUTTER = 484;
+    public static final int SOUND_TRIAL_SPAWNER_EJECT_ITEM = 485;
+    public static final int SOUND_TRIAL_SPAWNER_DETECT_PLAYER = 486;
+    public static final int SOUND_TRIAL_SPAWNER_SPAWN_MOB = 487;
+    public static final int SOUND_TRIAL_SPAWNER_CLOSE_SHUTTER = 488;
+    public static final int SOUND_TRIAL_SPAWNER_AMBIENT = 489;
     public static final int SOUND_COPPER_BULB_ON = 490;
     public static final int SOUND_COPPER_BULB_OFF = 491;
     public static final int SOUND_AMBIENT_IN_AIR = 492;
@@ -537,6 +543,10 @@ public class LevelSoundEventPacket extends DataPacket {
      * @since v662
      */
     public static final int SOUND_WIND_CHARGE_BURST = 509;
+    /**
+     * @since v712
+     */
+    public static final int SOUND_IMITATE_BOGGED = 510;
     /**
      * @since v671
      */
@@ -609,8 +619,12 @@ public class LevelSoundEventPacket extends DataPacket {
      * @since v685
      */
     public static final int SOUND_RECORD_PRECIPICE = 529;
+    /**
+     * @since v712
+     */
+    public static final int SOUND_VAULT_REJECT_REWARDED_PLAYER = 530;
 
-    public static final int SOUND_UNDEFINED = Utils.dynamic(530);
+    public static final int SOUND_UNDEFINED = Utils.dynamic(531);
 
     public int sound;
     public float x;
